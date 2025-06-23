@@ -73,24 +73,24 @@ function App() {
   const [loadingError, setLoadingError] = useState('');
   const [scrapingType, setScrapingType] = useState<'post_comments' | 'profile_details' | 'mixed'>('post_comments');
 
-  // Helper function to check Supabase connection with improved retry logic
-  const checkSupabaseConnection = async (retries = 3): Promise<boolean> => {
+  // Helper function to check Supabase connection with improved error handling
+  const checkSupabaseConnection = async (retries = 2): Promise<boolean> => {
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
         console.log(`Checking Supabase connection (attempt ${attempt}/${retries})...`);
         
-        // Create a timeout promise that can be cancelled
-        const timeoutMs = 10000; // 10 seconds per attempt
+        // Reduced timeout for faster failure detection
+        const timeoutMs = 5000; // 5 seconds per attempt
         let timeoutId: NodeJS.Timeout;
         
         const timeoutPromise = new Promise<never>((_, reject) => {
           timeoutId = setTimeout(() => {
-            reject(new Error(`Connection timeout after ${timeoutMs}ms (attempt ${attempt})`));
+            reject(new Error(`Connection timeout after ${timeoutMs}ms`));
           }, timeoutMs);
         });
 
         try {
-          // Simple health check - try to get session
+          // Simple health check - try to get session with shorter timeout
           const sessionPromise = supabase.auth.getSession();
           
           const result = await Promise.race([sessionPromise, timeoutPromise]);
@@ -115,8 +115,8 @@ function App() {
           throw error;
         }
         
-        // Wait before retry with exponential backoff
-        const delay = Math.min(2000 * Math.pow(2, attempt - 1), 8000); // Max 8 seconds
+        // Shorter wait before retry
+        const delay = 1000 * attempt; // 1s, 2s
         console.log(`Retrying in ${delay}ms...`);
         await new Promise(resolve => setTimeout(resolve, delay));
       }
@@ -124,7 +124,7 @@ function App() {
     return false;
   };
 
-  // Initialize auth listener with comprehensive error handling and retry logic
+  // Initialize auth listener with improved error handling
   useEffect(() => {
     const initAuth = async () => {
       try {
@@ -150,12 +150,22 @@ function App() {
 
         console.log('Environment variables validated, checking connection...');
 
-        // Check connection with retry logic
-        await checkSupabaseConnection(3);
+        // Check connection with reduced retries for faster failure
+        await checkSupabaseConnection(2);
 
-        // Get current session
+        // Get current session with timeout
         console.log('Getting current session...');
-        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        
+        const sessionTimeout = 8000; // 8 seconds total timeout
+        const sessionPromise = supabase.auth.getSession();
+        const sessionTimeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error('Session retrieval timeout')), sessionTimeout);
+        });
+
+        const { data: { session }, error: sessionError } = await Promise.race([
+          sessionPromise,
+          sessionTimeoutPromise
+        ]);
 
         if (sessionError) {
           console.error('Session error:', sessionError);
@@ -167,17 +177,29 @@ function App() {
           setUser(session.user);
           
           try {
-            const profile = await getUserProfile(session.user.id);
+            // Load profile with timeout
+            const profileTimeout = 5000;
+            const profilePromise = getUserProfile(session.user.id);
+            const profileTimeoutPromise = new Promise<never>((_, reject) => {
+              setTimeout(() => reject(new Error('Profile loading timeout')), profileTimeout);
+            });
+
+            const profile = await Promise.race([profilePromise, profileTimeoutPromise]);
+            
             if (profile) {
               setUserProfile(profile);
-              await loadUserData(profile.id);
+              // Load user data in background, don't block UI
+              loadUserData(profile.id).catch(error => {
+                console.error('Background data loading failed:', error);
+              });
             } else {
               console.warn('No user profile found, but user is authenticated');
-              setAuthError('User profile not found. Please try signing out and back in.');
+              // Don't set error here, user can still use the app
             }
           } catch (profileError) {
             console.error('Error loading user profile:', profileError);
-            setAuthError('Failed to load user profile. Please try refreshing the page.');
+            // Don't block the UI, user can still authenticate
+            console.warn('Profile loading failed, but continuing with authentication');
           }
         } else {
           console.log('No active session found');
@@ -190,7 +212,7 @@ function App() {
           if (error.message.includes('Failed to fetch') || error.message.includes('network')) {
             setAuthError('Network connection failed. Please check your internet connection and try again.');
           } else if (error.message.includes('timeout') || error.message.includes('Connection timeout')) {
-            setAuthError('Connection to Supabase timed out. Please check:\n\n1. Your internet connection\n2. That your Supabase project is active (not paused)\n3. Your .env file contains correct Supabase credentials\n\nThen refresh the page to try again.');
+            setAuthError('Connection to Supabase timed out. This could be due to:\n\n• Slow internet connection\n• Supabase project is paused or inactive\n• Network firewall blocking the connection\n\nPlease check your Supabase project status and try refreshing the page.');
           } else if (error.message.includes('environment variables') || error.message.includes('Invalid Supabase')) {
             setAuthError('Application configuration error. Please ensure your .env file contains valid Supabase credentials.');
           } else if (error.message.includes('CORS')) {
@@ -216,10 +238,15 @@ function App() {
 
         if (event === 'SIGNED_IN' && session?.user) {
           setUser(session.user);
-          const profile = await getUserProfile(session.user.id);
-          setUserProfile(profile);
-          if (profile) {
-            await loadUserData(profile.id);
+          try {
+            const profile = await getUserProfile(session.user.id);
+            setUserProfile(profile);
+            if (profile) {
+              // Load data in background
+              loadUserData(profile.id).catch(console.error);
+            }
+          } catch (error) {
+            console.error('Error loading profile after sign in:', error);
           }
         } else if (event === 'SIGNED_OUT') {
           setUser(null);
@@ -231,7 +258,7 @@ function App() {
         }
       } catch (error) {
         console.error('Auth state change error:', error);
-        setAuthError('Authentication state change failed. Please refresh the page.');
+        // Don't set auth error here as it might be temporary
       }
     });
 
@@ -243,10 +270,24 @@ function App() {
     try {
       console.log('Loading user data for:', userId);
       
-      // Load user's profiles and jobs initially (not all profiles)
-      const [userProfilesData, jobs] = await Promise.all([
-        getUserProfiles(userId), // Only fetch user's profiles for faster initial load
-        loadScrapingJobs(userId)
+      // Load user's profiles and jobs with timeout
+      const dataTimeout = 10000; // 10 seconds for data loading
+      
+      const loadDataWithTimeout = async () => {
+        const [userProfilesData, jobs] = await Promise.all([
+          getUserProfiles(userId), // Only fetch user's profiles for faster initial load
+          loadScrapingJobs(userId)
+        ]);
+        return { userProfilesData, jobs };
+      };
+
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Data loading timeout')), dataTimeout);
+      });
+
+      const { userProfilesData, jobs } = await Promise.race([
+        loadDataWithTimeout(),
+        timeoutPromise
       ]);
       
       setProfiles(userProfilesData); // Set to user's profiles only
@@ -255,7 +296,7 @@ function App() {
       console.log(`Loaded ${userProfilesData.length} profiles and ${jobs.length} jobs`);
     } catch (error) {
       console.error('Error loading user data:', error);
-      setAuthError('Failed to load user data. Some features may not work properly.');
+      // Don't set auth error, just log it
     }
   };
 
