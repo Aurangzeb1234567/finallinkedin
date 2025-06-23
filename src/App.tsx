@@ -73,32 +73,50 @@ function App() {
   const [loadingError, setLoadingError] = useState('');
   const [scrapingType, setScrapingType] = useState<'post_comments' | 'profile_details' | 'mixed'>('post_comments');
 
-  // Helper function to check Supabase connection with retry logic
+  // Helper function to check Supabase connection with improved retry logic
   const checkSupabaseConnection = async (retries = 3): Promise<boolean> => {
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
         console.log(`Checking Supabase connection (attempt ${attempt}/${retries})...`);
         
-        // Simple health check - try to get session with shorter timeout per attempt
-        const timeoutMs = 15000; // 15 seconds per attempt
-        const sessionPromise = supabase.auth.getSession();
-        const timeoutPromise = new Promise((_, reject) => 
-          setTimeout(() => reject(new Error(`Connection timeout (attempt ${attempt})`)), timeoutMs)
-        );
+        // Create a timeout promise that can be cancelled
+        const timeoutMs = 10000; // 10 seconds per attempt
+        let timeoutId: NodeJS.Timeout;
+        
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => {
+            reject(new Error(`Connection timeout after ${timeoutMs}ms (attempt ${attempt})`));
+          }, timeoutMs);
+        });
 
-        await Promise.race([sessionPromise, timeoutPromise]);
-        console.log('Supabase connection successful');
-        return true;
+        try {
+          // Simple health check - try to get session
+          const sessionPromise = supabase.auth.getSession();
+          
+          const result = await Promise.race([sessionPromise, timeoutPromise]);
+          
+          // Clear timeout if successful
+          clearTimeout(timeoutId!);
+          
+          console.log('Supabase connection successful');
+          return true;
+          
+        } catch (raceError) {
+          // Clear timeout in case of error
+          clearTimeout(timeoutId!);
+          throw raceError;
+        }
         
       } catch (error) {
         console.warn(`Connection attempt ${attempt} failed:`, error);
         
         if (attempt === retries) {
+          // On final attempt, throw the error
           throw error;
         }
         
-        // Wait before retry (exponential backoff)
-        const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+        // Wait before retry with exponential backoff
+        const delay = Math.min(2000 * Math.pow(2, attempt - 1), 8000); // Max 8 seconds
         console.log(`Retrying in ${delay}ms...`);
         await new Promise(resolve => setTimeout(resolve, delay));
       }
@@ -172,7 +190,7 @@ function App() {
           if (error.message.includes('Failed to fetch') || error.message.includes('network')) {
             setAuthError('Network connection failed. Please check your internet connection and try again.');
           } else if (error.message.includes('timeout') || error.message.includes('Connection timeout')) {
-            setAuthError('Connection to Supabase timed out. This may be due to network issues or your Supabase project being paused. Please check your Supabase dashboard and try again.');
+            setAuthError('Connection to Supabase timed out. Please check:\n\n1. Your internet connection\n2. That your Supabase project is active (not paused)\n3. Your .env file contains correct Supabase credentials\n\nThen refresh the page to try again.');
           } else if (error.message.includes('environment variables') || error.message.includes('Invalid Supabase')) {
             setAuthError('Application configuration error. Please ensure your .env file contains valid Supabase credentials.');
           } else if (error.message.includes('CORS')) {
@@ -769,7 +787,7 @@ function App() {
           </div>
           
           <h2 className="text-xl font-bold text-gray-900 mb-4">Connection Error</h2>
-          <p className="text-gray-600 mb-6">{authError}</p>
+          <div className="text-gray-600 mb-6 whitespace-pre-line text-left">{authError}</div>
           
           <div className="space-y-3">
             <button
