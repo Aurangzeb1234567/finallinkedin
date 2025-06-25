@@ -12,14 +12,6 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     autoRefreshToken: true,
     persistSession: true,
     detectSessionInUrl: true
-  },
-  db: {
-    schema: 'public'
-  },
-  global: {
-    headers: {
-      'x-my-custom-header': 'linkedin-scraper'
-    }
   }
 })
 
@@ -67,14 +59,10 @@ export interface ScrapingJob {
   completed_at?: string;
 }
 
-// Auth helper functions
+// Simple auth helper functions
 export const getCurrentUser = async () => {
   try {
-    const { data: { user }, error } = await supabase.auth.getUser()
-    if (error) {
-      console.error('Error getting current user:', error)
-      return null
-    }
+    const { data: { user } } = await supabase.auth.getUser()
     return user
   } catch (error) {
     console.error('Error getting current user:', error)
@@ -84,22 +72,54 @@ export const getCurrentUser = async () => {
 
 export const getUserProfile = async (authUserId: string): Promise<User | null> => {
   try {
-    const { data, error } = await supabase
-      .rpc('get_or_create_user_profile', { user_auth_id: authUserId })
+    // First try to get existing user profile
+    const { data: existingUser, error: fetchError } = await supabase
+      .from('users')
+      .select('*')
+      .eq('auth_user_id', authUserId)
+      .single()
     
-    if (error) {
-      console.error('Error getting user profile:', error)
-      return null
+    if (existingUser) {
+      return existingUser
     }
     
-    return data
+    // If user doesn't exist, create one
+    if (fetchError?.code === 'PGRST116') {
+      const { data: authUser } = await supabase.auth.getUser()
+      if (authUser.user) {
+        const newUser = {
+          auth_user_id: authUserId,
+          username: authUser.user.email?.split('@')[0] || 'user',
+          email: authUser.user.email || '',
+          full_name: authUser.user.user_metadata?.full_name || 
+                    `${authUser.user.user_metadata?.first_name || ''} ${authUser.user.user_metadata?.last_name || ''}`.trim() ||
+                    authUser.user.email?.split('@')[0] || 'User'
+        }
+        
+        const { data: createdUser, error: createError } = await supabase
+          .from('users')
+          .insert([newUser])
+          .select()
+          .single()
+        
+        if (createError) {
+          console.error('Error creating user profile:', createError)
+          return null
+        }
+        
+        return createdUser
+      }
+    }
+    
+    console.error('Error fetching user profile:', fetchError)
+    return null
   } catch (error) {
-    console.error('Error getting user profile:', error)
+    console.error('Error in getUserProfile:', error)
     return null
   }
 }
 
-// Profile optimization functions
+// Profile functions with error handling
 export const checkProfileExists = async (linkedinUrl: string): Promise<LinkedInProfile | null> => {
   try {
     const { data, error } = await supabase

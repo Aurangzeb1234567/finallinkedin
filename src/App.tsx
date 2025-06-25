@@ -60,8 +60,6 @@ function App() {
   const [activeTab, setActiveTab] = useState<'scraper' | 'profiles' | 'jobs'>('scraper');
   const [currentView, setCurrentView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list' | 'single-profile-details' | 'user-profile'>('form');
   const [previousView, setPreviousView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list'>('form');
-  
-  // Performance optimization: Add loading state for profiles tab
   const [isProfilesTabLoading, setIsProfilesTabLoading] = useState(false);
   
   // Scraping state
@@ -73,230 +71,81 @@ function App() {
   const [loadingError, setLoadingError] = useState('');
   const [scrapingType, setScrapingType] = useState<'post_comments' | 'profile_details' | 'mixed'>('post_comments');
 
-  // Helper function to check Supabase connection with improved error handling
-  const checkSupabaseConnection = async (retries = 2): Promise<boolean> => {
-    for (let attempt = 1; attempt <= retries; attempt++) {
-      try {
-        console.log(`Checking Supabase connection (attempt ${attempt}/${retries})...`);
-        
-        // Reduced timeout for faster failure detection
-        const timeoutMs = 5000; // 5 seconds per attempt
-        let timeoutId: NodeJS.Timeout;
-        
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          timeoutId = setTimeout(() => {
-            reject(new Error(`Connection timeout after ${timeoutMs}ms`));
-          }, timeoutMs);
-        });
-
-        try {
-          // Simple health check - try to get session with shorter timeout
-          const sessionPromise = supabase.auth.getSession();
-          
-          const result = await Promise.race([sessionPromise, timeoutPromise]);
-          
-          // Clear timeout if successful
-          clearTimeout(timeoutId!);
-          
-          console.log('Supabase connection successful');
-          return true;
-          
-        } catch (raceError) {
-          // Clear timeout in case of error
-          clearTimeout(timeoutId!);
-          throw raceError;
-        }
-        
-      } catch (error) {
-        console.warn(`Connection attempt ${attempt} failed:`, error);
-        
-        if (attempt === retries) {
-          // On final attempt, throw the error
-          throw error;
-        }
-        
-        // Shorter wait before retry
-        const delay = 1000 * attempt; // 1s, 2s
-        console.log(`Retrying in ${delay}ms...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-      }
-    }
-    return false;
-  };
-
-  // Initialize auth listener with improved error handling
+  // Simple initialization
   useEffect(() => {
-    const initAuth = async () => {
-      try {
-        console.log('Initializing authentication...');
-        setAuthError('');
-        
-        // Check if Supabase environment variables are configured
-        if (!import.meta.env.VITE_SUPABASE_URL || !import.meta.env.VITE_SUPABASE_ANON_KEY) {
-          throw new Error('Supabase environment variables are not configured. Please check your .env file.');
-        }
+    initializeApp();
+  }, []);
 
-        // Validate environment variables format
-        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-        const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-        
-        if (!supabaseUrl.startsWith('https://') || !supabaseUrl.includes('.supabase.co')) {
-          throw new Error('Invalid Supabase URL format. Please check your VITE_SUPABASE_URL in the .env file.');
-        }
-        
-        if (supabaseKey.length < 100) {
-          throw new Error('Invalid Supabase anonymous key format. Please check your VITE_SUPABASE_ANON_KEY in the .env file.');
-        }
+  const initializeApp = async () => {
+    try {
+      setAuthError('');
+      console.log('Initializing app...');
 
-        console.log('Environment variables validated, checking connection...');
-
-        // Check connection with reduced retries for faster failure
-        await checkSupabaseConnection(2);
-
-        // Get current session with timeout
-        console.log('Getting current session...');
-        
-        const sessionTimeout = 8000; // 8 seconds total timeout
-        const sessionPromise = supabase.auth.getSession();
-        const sessionTimeoutPromise = new Promise<never>((_, reject) => {
-          setTimeout(() => reject(new Error('Session retrieval timeout')), sessionTimeout);
-        });
-
-        const { data: { session }, error: sessionError } = await Promise.race([
-          sessionPromise,
-          sessionTimeoutPromise
-        ]);
-
-        if (sessionError) {
-          console.error('Session error:', sessionError);
-          throw new Error(`Authentication error: ${sessionError.message}`);
-        }
-
-        if (session?.user) {
-          console.log('User session found, loading profile...');
-          setUser(session.user);
-          
-          try {
-            // Load profile with timeout
-            const profileTimeout = 5000;
-            const profilePromise = getUserProfile(session.user.id);
-            const profileTimeoutPromise = new Promise<never>((_, reject) => {
-              setTimeout(() => reject(new Error('Profile loading timeout')), profileTimeout);
-            });
-
-            const profile = await Promise.race([profilePromise, profileTimeoutPromise]);
-            
-            if (profile) {
-              setUserProfile(profile);
-              // Load user data in background, don't block UI
-              loadUserData(profile.id).catch(error => {
-                console.error('Background data loading failed:', error);
-              });
-            } else {
-              console.warn('No user profile found, but user is authenticated');
-              // Don't set error here, user can still use the app
-            }
-          } catch (profileError) {
-            console.error('Error loading user profile:', profileError);
-            // Don't block the UI, user can still authenticate
-            console.warn('Profile loading failed, but continuing with authentication');
-          }
-        } else {
-          console.log('No active session found');
-        }
-        
-      } catch (error) {
-        console.error('Auth initialization error:', error);
-        
-        if (error instanceof Error) {
-          if (error.message.includes('Failed to fetch') || error.message.includes('network')) {
-            setAuthError('Network connection failed. Please check your internet connection and try again.');
-          } else if (error.message.includes('timeout') || error.message.includes('Connection timeout')) {
-            setAuthError('Connection to Supabase timed out. This could be due to:\n\n• Slow internet connection\n• Supabase project is paused or inactive\n• Network firewall blocking the connection\n\nPlease check your Supabase project status and try refreshing the page.');
-          } else if (error.message.includes('environment variables') || error.message.includes('Invalid Supabase')) {
-            setAuthError('Application configuration error. Please ensure your .env file contains valid Supabase credentials.');
-          } else if (error.message.includes('CORS')) {
-            setAuthError('Cross-origin request blocked. Please check your Supabase project settings.');
-          } else {
-            setAuthError(`Authentication failed: ${error.message}`);
-          }
-        } else {
-          setAuthError('An unexpected error occurred during initialization.');
-        }
-      } finally {
-        setIsLoading(false);
+      // Check environment variables
+      if (!import.meta.env.VITE_SUPABASE_URL || !import.meta.env.VITE_SUPABASE_ANON_KEY) {
+        throw new Error('Missing Supabase environment variables. Please check your .env file.');
       }
-    };
 
-    initAuth();
-
-    // Set up auth state change listener with error handling
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      try {
-        console.log('Auth state changed:', event);
-        setAuthError('');
-
-        if (event === 'SIGNED_IN' && session?.user) {
-          setUser(session.user);
-          try {
-            const profile = await getUserProfile(session.user.id);
-            setUserProfile(profile);
-            if (profile) {
-              // Load data in background
-              loadUserData(profile.id).catch(console.error);
-            }
-          } catch (error) {
-            console.error('Error loading profile after sign in:', error);
-          }
-        } else if (event === 'SIGNED_OUT') {
-          setUser(null);
-          setUserProfile(null);
-          setProfiles([]);
-          setScrapingJobs([]);
-        } else if (event === 'TOKEN_REFRESHED') {
-          console.log('Token refreshed successfully');
+      // Get current user
+      const currentUser = await getCurrentUser();
+      
+      if (currentUser) {
+        console.log('User found:', currentUser.id);
+        setUser(currentUser);
+        
+        // Get or create user profile
+        const profile = await getUserProfile(currentUser.id);
+        if (profile) {
+          setUserProfile(profile);
+          // Load user data in background
+          loadUserData(profile.id);
         }
-      } catch (error) {
-        console.error('Auth state change error:', error);
-        // Don't set auth error here as it might be temporary
+      } else {
+        console.log('No user found');
+      }
+
+    } catch (error) {
+      console.error('App initialization error:', error);
+      setAuthError(error instanceof Error ? error.message : 'Failed to initialize app');
+    } finally {
+      setIsLoading(false);
+    }
+
+    // Set up auth listener
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log('Auth state changed:', event);
+      
+      if (event === 'SIGNED_IN' && session?.user) {
+        setUser(session.user);
+        const profile = await getUserProfile(session.user.id);
+        setUserProfile(profile);
+        if (profile) {
+          loadUserData(profile.id);
+        }
+      } else if (event === 'SIGNED_OUT') {
+        setUser(null);
+        setUserProfile(null);
+        setProfiles([]);
+        setScrapingJobs([]);
       }
     });
 
     return () => subscription.unsubscribe();
-  }, []);
+  };
 
-  // Performance optimization: Load only user's profiles initially
   const loadUserData = async (userId: string) => {
     try {
-      console.log('Loading user data for:', userId);
-      
-      // Load user's profiles and jobs with timeout
-      const dataTimeout = 10000; // 10 seconds for data loading
-      
-      const loadDataWithTimeout = async () => {
-        const [userProfilesData, jobs] = await Promise.all([
-          getUserProfiles(userId), // Only fetch user's profiles for faster initial load
-          loadScrapingJobs(userId)
-        ]);
-        return { userProfilesData, jobs };
-      };
-
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('Data loading timeout')), dataTimeout);
-      });
-
-      const { userProfilesData, jobs } = await Promise.race([
-        loadDataWithTimeout(),
-        timeoutPromise
+      console.log('Loading user data...');
+      const [userProfilesData, jobs] = await Promise.all([
+        getUserProfiles(userId),
+        loadScrapingJobs(userId)
       ]);
       
-      setProfiles(userProfilesData); // Set to user's profiles only
+      setProfiles(userProfilesData);
       setScrapingJobs(jobs);
-      
       console.log(`Loaded ${userProfilesData.length} profiles and ${jobs.length} jobs`);
     } catch (error) {
       console.error('Error loading user data:', error);
-      // Don't set auth error, just log it
     }
   };
 
@@ -467,12 +316,11 @@ function App() {
         await updateScrapingJob(jobId, 'completed', profileUrls.length);
       }
 
-      // Refresh profiles list - only get user's profiles if we're not on the profiles tab
+      // Refresh profiles list
       if (activeTab !== 'profiles') {
         const updatedProfiles = await getUserProfiles(userProfile.id);
         setProfiles(updatedProfiles);
       } else {
-        // If we're on profiles tab, refresh all profiles
         const updatedProfiles = await getAllProfiles();
         setProfiles(updatedProfiles);
       }
@@ -779,7 +627,6 @@ function App() {
     setSelectedProfileForDetails(null);
   };
 
-  // Performance optimization: Load all profiles only when profiles tab is clicked
   const handleTabChange = async (tab: 'scraper' | 'profiles' | 'jobs') => {
     setActiveTab(tab);
     
@@ -842,8 +689,7 @@ function App() {
               onClick={() => {
                 setAuthError('');
                 setIsLoading(true);
-                // Retry initialization
-                window.location.reload();
+                initializeApp();
               }}
               className="w-full px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
             >
@@ -854,20 +700,6 @@ function App() {
           <div className="mt-6 text-xs text-gray-500">
             If this problem persists, please check your internet connection or contact support.
           </div>
-          
-          {/* Additional troubleshooting info */}
-          <details className="mt-4 text-left">
-            <summary className="text-sm text-gray-600 cursor-pointer hover:text-gray-800">
-              Troubleshooting Steps
-            </summary>
-            <div className="mt-2 text-xs text-gray-600 space-y-2">
-              <p>1. Check your .env file contains valid Supabase credentials</p>
-              <p>2. Verify your Supabase project is active (not paused)</p>
-              <p>3. Ensure stable internet connection</p>
-              <p>4. Try disabling browser extensions or VPN</p>
-              <p>5. Check browser console for additional error details</p>
-            </div>
-          </details>
         </div>
       </div>
     );
@@ -879,11 +711,6 @@ function App() {
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
           <div className="text-gray-600">Loading...</div>
-          {authError && (
-            <div className="mt-4 text-sm text-amber-600 max-w-md">
-              {authError}
-            </div>
-          )}
         </div>
       </div>
     );
@@ -1079,7 +906,6 @@ function App() {
                     onBack={handleBackToProfilesList}
                   />
                 ) : (
-                  // Performance optimization: Show loading indicator while fetching all profiles
                   isProfilesTabLoading ? (
                     <div className="min-h-[400px] flex items-center justify-center bg-white rounded-xl shadow-lg border border-gray-100">
                       <div className="text-center">
