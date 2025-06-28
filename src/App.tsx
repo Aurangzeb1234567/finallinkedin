@@ -73,39 +73,43 @@ function App() {
 
   // Simple initialization
   useEffect(() => {
+    console.log('🚀 App: Component mounted, initializing...');
     initializeApp();
   }, []);
 
   const initializeApp = async () => {
     try {
       setAuthError('');
-      console.log('Initializing app...');
+      console.log('🚀 App: Starting initialization...');
 
       // Check environment variables
       if (!import.meta.env.VITE_SUPABASE_URL || !import.meta.env.VITE_SUPABASE_ANON_KEY) {
         throw new Error('Missing Supabase environment variables. Please check your .env file.');
       }
 
+      console.log('🚀 App: Environment variables OK');
+
       // Get current user
       const currentUser = await getCurrentUser();
       
       if (currentUser) {
-        console.log('User found:', currentUser.id);
+        console.log('🚀 App: User found:', currentUser.id);
         setUser(currentUser);
         
         // Get or create user profile
         const profile = await getUserProfile(currentUser.id);
         if (profile) {
+          console.log('🚀 App: User profile loaded:', profile.id);
           setUserProfile(profile);
           // Load user data in background
           loadUserData(profile.id);
         }
       } else {
-        console.log('No user found');
+        console.log('🚀 App: No user found');
       }
 
     } catch (error) {
-      console.error('App initialization error:', error);
+      console.error('🚀 App: Initialization error:', error);
       setAuthError(error instanceof Error ? error.message : 'Failed to initialize app');
     } finally {
       setIsLoading(false);
@@ -113,7 +117,7 @@ function App() {
 
     // Set up auth listener
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      console.log('Auth state changed:', event);
+      console.log('🚀 App: Auth state changed:', event);
       
       if (event === 'SIGNED_IN' && session?.user) {
         setUser(session.user);
@@ -135,7 +139,7 @@ function App() {
 
   const loadUserData = async (userId: string) => {
     try {
-      console.log('Loading user data...');
+      console.log('🚀 App: Loading user data for userId:', userId);
       const [userProfilesData, jobs] = await Promise.all([
         getUserProfiles(userId),
         loadScrapingJobs(userId)
@@ -143,9 +147,9 @@ function App() {
       
       setProfiles(userProfilesData);
       setScrapingJobs(jobs);
-      console.log(`Loaded ${userProfilesData.length} profiles and ${jobs.length} jobs`);
+      console.log(`🚀 App: Loaded ${userProfilesData.length} profiles and ${jobs.length} jobs`);
     } catch (error) {
-      console.error('Error loading user data:', error);
+      console.error('🚀 App: Error loading user data:', error);
     }
   };
 
@@ -159,13 +163,13 @@ function App() {
         .limit(50);
       
       if (error) {
-        console.error('Error loading scraping jobs:', error);
+        console.error('🚀 App: Error loading scraping jobs:', error);
         return [];
       }
       
       return data || [];
     } catch (error) {
-      console.error('Error loading scraping jobs:', error);
+      console.error('🚀 App: Error loading scraping jobs:', error);
       return [];
     }
   };
@@ -177,11 +181,14 @@ function App() {
   };
 
   const handleKeySelect = (key: ApifyKey) => {
+    console.log('🔑 App: Key selected:', key.id, key.key_name);
     setSelectedKeyId(key.id);
   };
 
   const createScrapingJob = async (jobType: ScrapingJob['job_type'], inputUrl: string): Promise<string> => {
     if (!userProfile) throw new Error('User not authenticated');
+    
+    console.log('📝 App: Creating scraping job:', { jobType, inputUrl, userId: userProfile.id, keyId: selectedKeyId });
     
     const { data, error } = await supabase
       .from('scraping_jobs')
@@ -195,7 +202,12 @@ function App() {
       .select()
       .single();
     
-    if (error) throw error;
+    if (error) {
+      console.error('📝 App: Error creating scraping job:', error);
+      throw error;
+    }
+    
+    console.log('📝 App: Scraping job created:', data.id);
     
     // Refresh jobs list
     const updatedJobs = await loadScrapingJobs(userProfile.id);
@@ -206,6 +218,8 @@ function App() {
 
   const updateScrapingJob = async (jobId: string, status: ScrapingJob['status'], resultsCount?: number, errorMessage?: string) => {
     if (!userProfile) return;
+    
+    console.log('📝 App: Updating scraping job:', { jobId, status, resultsCount, errorMessage });
     
     const updateData: any = {
       status,
@@ -225,16 +239,30 @@ function App() {
   };
 
   const handleScrape = async (type: 'post_comments' | 'profile_details' | 'mixed', url: string) => {
+    console.log('🔥 App: SCRAPING INITIATED!');
+    console.log('🔥 App: Scraping parameters:', {
+      type,
+      url,
+      userProfile: userProfile?.id,
+      selectedKeyId,
+      hasUserProfile: !!userProfile,
+      hasSelectedKey: !!selectedKeyId
+    });
+
     if (!userProfile) {
+      console.error('🔥 App: No user profile - cannot scrape');
       alert('Please sign in to start scraping');
       return;
     }
 
     if (!selectedKeyId) {
+      console.error('🔥 App: No API key selected - cannot scrape');
       alert('Please select an Apify API key first');
       return;
     }
 
+    console.log('🔥 App: Getting API key from database...');
+    
     // Get the selected API key
     const { data: keyData, error: keyError } = await supabase
       .from('apify_keys')
@@ -242,11 +270,19 @@ function App() {
       .eq('id', selectedKeyId)
       .single();
 
+    console.log('🔥 App: API key query result:', { 
+      hasData: !!keyData, 
+      error: keyError,
+      keyPreview: keyData?.api_key?.substring(0, 10) + '...' 
+    });
+
     if (keyError || !keyData) {
+      console.error('🔥 App: Invalid API key selected:', keyError);
       alert('Invalid API key selected');
       return;
     }
 
+    console.log('🔥 App: Starting scraping process...');
     setIsScraping(true);
     setScrapingType(type);
     setLoadingError('');
@@ -257,16 +293,20 @@ function App() {
     try {
       // Create scraping job
       jobId = await createScrapingJob(type, url);
+      console.log('🔥 App: Scraping job created:', jobId);
       
       const apifyService = createApifyService(keyData.api_key);
 
       if (type === 'post_comments') {
+        console.log('🔥 App: Starting post comments scraping...');
         updateLoadingProgress('scraping_comments', 25, 'Extracting comments from LinkedIn post...');
         
         const datasetId = await apifyService.scrapePostComments(url);
+        console.log('🔥 App: Comments scraping completed, dataset:', datasetId);
         
         updateLoadingProgress('saving_data', 75, 'Processing comment data...');
         const commentsData = await apifyService.getDatasetItems(datasetId);
+        console.log('🔥 App: Comments data retrieved:', commentsData.length, 'items');
         
         setCommentersData(commentsData);
         setCurrentView('comments');
@@ -275,10 +315,12 @@ function App() {
         await updateScrapingJob(jobId, 'completed', commentsData.length);
 
       } else if (type === 'profile_details') {
+        console.log('🔥 App: Starting profile details scraping...');
         updateLoadingProgress('scraping_profiles', 25, 'Checking existing profiles in database...');
         
         const profileUrls = Array.isArray(url) ? url : [url];
         const profilesData = await getProfilesWithOptimization(profileUrls, apifyService, userProfile.id);
+        console.log('🔥 App: Profile details scraping completed:', profilesData.length, 'profiles');
         
         updateLoadingProgress('saving_data', 75, 'Saving profile data...');
         setProfileDetails(profilesData);
@@ -289,10 +331,12 @@ function App() {
         await updateScrapingJob(jobId, 'completed', profilesData.length);
 
       } else if (type === 'mixed') {
+        console.log('🔥 App: Starting mixed scraping...');
         updateLoadingProgress('scraping_comments', 20, 'Extracting comments from LinkedIn post...');
         
         const datasetId = await apifyService.scrapePostComments(url);
         const commentsData = await apifyService.getDatasetItems(datasetId);
+        console.log('🔥 App: Mixed scraping - comments retrieved:', commentsData.length);
         
         updateLoadingProgress('extracting_profiles', 40, 'Extracting profile URLs from comments...');
         
@@ -301,10 +345,13 @@ function App() {
           .filter(Boolean)
           .slice(0, 50);
         
+        console.log('🔥 App: Mixed scraping - profile URLs extracted:', profileUrls.length);
+        
         if (profileUrls.length > 0) {
           updateLoadingProgress('scraping_profiles', 60, `Checking and scraping ${profileUrls.length} profiles...`);
           
           const profilesData = await getProfilesWithOptimization(profileUrls, apifyService, userProfile.id);
+          console.log('🔥 App: Mixed scraping - profiles scraped:', profilesData.length);
           
           updateLoadingProgress('saving_data', 85, 'Saving all data...');
           setProfileDetails(profilesData);
@@ -325,8 +372,10 @@ function App() {
         setProfiles(updatedProfiles);
       }
 
+      console.log('🔥 App: Scraping process completed successfully!');
+
     } catch (error) {
-      console.error('Scraping error:', error);
+      console.error('🔥 App: Scraping error:', error);
       
       let errorMessage = 'Unknown error occurred';
       if (error instanceof Error) {

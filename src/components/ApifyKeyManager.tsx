@@ -24,12 +24,14 @@ export const ApifyKeyManager: React.FC<ApifyKeyManagerProps> = ({
   const [success, setSuccess] = useState<string>('');
 
   useEffect(() => {
+    console.log('🔑 ApifyKeyManager: Component mounted with userId:', userId);
     if (userId) {
       loadKeys();
     }
   }, [userId]);
 
   const loadKeys = async () => {
+    console.log('🔑 ApifyKeyManager: Loading keys for userId:', userId);
     try {
       setError('');
       const { data, error } = await supabase
@@ -38,26 +40,35 @@ export const ApifyKeyManager: React.FC<ApifyKeyManagerProps> = ({
         .eq('user_id', userId)
         .order('created_at', { ascending: false });
 
+      console.log('🔑 ApifyKeyManager: Supabase response:', { data, error });
+
       if (error) {
-        console.error('Error loading API keys:', error);
+        console.error('🔑 ApifyKeyManager: Error loading API keys:', error);
         setError(`Failed to load API keys: ${error.message}`);
         return;
       }
 
+      console.log('🔑 ApifyKeyManager: Successfully loaded keys:', data?.length || 0);
       setKeys(data || []);
 
       // Auto-select first active key if none selected
       if (!selectedKeyId && data && data.length > 0) {
         const activeKey = data.find(k => k.is_active) || data[0];
+        console.log('🔑 ApifyKeyManager: Auto-selecting key:', activeKey.id);
         onKeySelect(activeKey);
       }
     } catch (error) {
-      console.error('Error loading API keys:', error);
+      console.error('🔑 ApifyKeyManager: Exception loading API keys:', error);
       setError('Failed to load API keys. Please try again.');
     }
   };
 
   const validateForm = () => {
+    console.log('🔑 ApifyKeyManager: Validating form data:', {
+      key_name: formData.key_name.trim(),
+      api_key_length: formData.api_key.trim().length
+    });
+
     if (!formData.key_name.trim()) {
       setError('Please enter a key name');
       return false;
@@ -78,7 +89,17 @@ export const ApifyKeyManager: React.FC<ApifyKeyManagerProps> = ({
   };
 
   const saveKey = async () => {
-    if (!validateForm()) return;
+    console.log('🔑 ApifyKeyManager: Starting saveKey process');
+    console.log('🔑 ApifyKeyManager: Form data:', {
+      key_name: formData.key_name.trim(),
+      api_key_preview: formData.api_key.trim().substring(0, 10) + '...',
+      editing: !!editingKey
+    });
+
+    if (!validateForm()) {
+      console.log('🔑 ApifyKeyManager: Form validation failed');
+      return;
+    }
 
     setIsLoading(true);
     setError('');
@@ -86,40 +107,63 @@ export const ApifyKeyManager: React.FC<ApifyKeyManagerProps> = ({
 
     try {
       if (editingKey) {
+        console.log('🔑 ApifyKeyManager: Updating existing key:', editingKey.id);
+        
         // Update existing key
+        const updateData = {
+          key_name: formData.key_name.trim(),
+          api_key: formData.api_key.trim(),
+          updated_at: new Date().toISOString()
+        };
+        
+        console.log('🔑 ApifyKeyManager: Update data:', {
+          ...updateData,
+          api_key: updateData.api_key.substring(0, 10) + '...'
+        });
+
         const { data, error } = await supabase
           .from('apify_keys')
-          .update({
-            key_name: formData.key_name.trim(),
-            api_key: formData.api_key.trim(),
-            updated_at: new Date().toISOString()
-          })
+          .update(updateData)
           .eq('id', editingKey.id)
           .select()
           .single();
 
+        console.log('🔑 ApifyKeyManager: Update response:', { data, error });
+
         if (error) {
-          console.error('Error updating API key:', error);
+          console.error('🔑 ApifyKeyManager: Error updating API key:', error);
           setError(`Failed to update API key: ${error.message}`);
           return;
         }
 
+        console.log('🔑 ApifyKeyManager: Successfully updated key');
         setKeys(prev => prev.map(k => k.id === editingKey.id ? data : k));
         setSuccess('API key updated successfully!');
       } else {
+        console.log('🔑 ApifyKeyManager: Creating new key for userId:', userId);
+        
         // Create new key
+        const insertData = {
+          user_id: userId,
+          key_name: formData.key_name.trim(),
+          api_key: formData.api_key.trim()
+        };
+        
+        console.log('🔑 ApifyKeyManager: Insert data:', {
+          ...insertData,
+          api_key: insertData.api_key.substring(0, 10) + '...'
+        });
+
         const { data, error } = await supabase
           .from('apify_keys')
-          .insert([{
-            user_id: userId,
-            key_name: formData.key_name.trim(),
-            api_key: formData.api_key.trim()
-          }])
+          .insert([insertData])
           .select()
           .single();
 
+        console.log('🔑 ApifyKeyManager: Insert response:', { data, error });
+
         if (error) {
-          console.error('Error creating API key:', error);
+          console.error('🔑 ApifyKeyManager: Error creating API key:', error);
           if (error.code === '23505') {
             setError('A key with this name already exists. Please choose a different name.');
           } else {
@@ -128,10 +172,12 @@ export const ApifyKeyManager: React.FC<ApifyKeyManagerProps> = ({
           return;
         }
 
+        console.log('🔑 ApifyKeyManager: Successfully created key:', data.id);
         setKeys(prev => [data, ...prev]);
         setSuccess('API key created successfully!');
         
         // Auto-select the new key
+        console.log('🔑 ApifyKeyManager: Auto-selecting newly created key');
         onKeySelect(data);
       }
 
@@ -144,7 +190,7 @@ export const ApifyKeyManager: React.FC<ApifyKeyManagerProps> = ({
       setTimeout(() => setSuccess(''), 3000);
 
     } catch (error) {
-      console.error('Error saving API key:', error);
+      console.error('🔑 ApifyKeyManager: Exception saving API key:', error);
       setError('An unexpected error occurred. Please try again.');
     } finally {
       setIsLoading(false);
@@ -152,7 +198,12 @@ export const ApifyKeyManager: React.FC<ApifyKeyManagerProps> = ({
   };
 
   const deleteKey = async (keyId: string) => {
-    if (!confirm('Are you sure you want to delete this API key?')) return;
+    console.log('🔑 ApifyKeyManager: Deleting key:', keyId);
+    
+    if (!confirm('Are you sure you want to delete this API key?')) {
+      console.log('🔑 ApifyKeyManager: Delete cancelled by user');
+      return;
+    }
 
     try {
       setError('');
@@ -161,12 +212,15 @@ export const ApifyKeyManager: React.FC<ApifyKeyManagerProps> = ({
         .delete()
         .eq('id', keyId);
 
+      console.log('🔑 ApifyKeyManager: Delete response:', { error });
+
       if (error) {
-        console.error('Error deleting API key:', error);
+        console.error('🔑 ApifyKeyManager: Error deleting API key:', error);
         setError(`Failed to delete API key: ${error.message}`);
         return;
       }
       
+      console.log('🔑 ApifyKeyManager: Successfully deleted key');
       setKeys(prev => prev.filter(k => k.id !== keyId));
       setSuccess('API key deleted successfully!');
       
@@ -174,6 +228,7 @@ export const ApifyKeyManager: React.FC<ApifyKeyManagerProps> = ({
       if (selectedKeyId === keyId && keys.length > 1) {
         const remainingKeys = keys.filter(k => k.id !== keyId);
         if (remainingKeys.length > 0) {
+          console.log('🔑 ApifyKeyManager: Selecting replacement key:', remainingKeys[0].id);
           onKeySelect(remainingKeys[0]);
         }
       }
@@ -182,7 +237,7 @@ export const ApifyKeyManager: React.FC<ApifyKeyManagerProps> = ({
       setTimeout(() => setSuccess(''), 3000);
 
     } catch (error) {
-      console.error('Error deleting API key:', error);
+      console.error('🔑 ApifyKeyManager: Exception deleting API key:', error);
       setError('Failed to delete API key. Please try again.');
     }
   };
@@ -195,6 +250,7 @@ export const ApifyKeyManager: React.FC<ApifyKeyManagerProps> = ({
   };
 
   const startEdit = (key: ApifyKey) => {
+    console.log('🔑 ApifyKeyManager: Starting edit for key:', key.id);
     setEditingKey(key);
     setFormData({ key_name: key.key_name, api_key: key.api_key });
     setShowCreateForm(true);
@@ -203,6 +259,7 @@ export const ApifyKeyManager: React.FC<ApifyKeyManagerProps> = ({
   };
 
   const cancelEdit = () => {
+    console.log('🔑 ApifyKeyManager: Cancelling edit');
     setEditingKey(null);
     setFormData({ key_name: '', api_key: '' });
     setShowCreateForm(false);
@@ -212,7 +269,13 @@ export const ApifyKeyManager: React.FC<ApifyKeyManagerProps> = ({
 
   const handleFormSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    console.log('🔑 ApifyKeyManager: Form submitted');
     saveKey();
+  };
+
+  const handleKeySelect = (key: ApifyKey) => {
+    console.log('🔑 ApifyKeyManager: Key selected:', key.id, key.key_name);
+    onKeySelect(key);
   };
 
   return (
@@ -221,6 +284,7 @@ export const ApifyKeyManager: React.FC<ApifyKeyManagerProps> = ({
         <h3 className="text-lg font-semibold text-gray-900">Apify API Keys</h3>
         <button
           onClick={() => {
+            console.log('🔑 ApifyKeyManager: Add key button clicked');
             setShowCreateForm(!showCreateForm);
             setError('');
             setSuccess('');
@@ -308,7 +372,7 @@ export const ApifyKeyManager: React.FC<ApifyKeyManagerProps> = ({
                 ? 'border-blue-500 bg-blue-50'
                 : 'border-gray-200 hover:border-gray-300'
             }`}
-            onClick={() => onKeySelect(key)}
+            onClick={() => handleKeySelect(key)}
           >
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
